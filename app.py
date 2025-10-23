@@ -116,10 +116,35 @@ def get_historical_data(stock, days):
     except Exception as e:
         return None, f"Error fetching historical data: {str(e)}"
 
-def create_price_chart(hist_data, symbol, time_range):
-    """Create interactive price chart"""
+def calculate_sma(data, window):
+    """Calculate Simple Moving Average"""
+    return data['Close'].rolling(window=window).mean()
+
+def calculate_rsi(data, period=14):
+    """Calculate Relative Strength Index"""
+    delta = data['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+def calculate_macd(data, fast=12, slow=26, signal=9):
+    """Calculate MACD (Moving Average Convergence Divergence)"""
+    exp1 = data['Close'].ewm(span=fast, adjust=False).mean()
+    exp2 = data['Close'].ewm(span=slow, adjust=False).mean()
+    macd = exp1 - exp2
+    signal_line = macd.ewm(span=signal, adjust=False).mean()
+    histogram = macd - signal_line
+    
+    return macd, signal_line, histogram
+
+def create_price_chart(hist_data, symbol, time_range, show_sma20=False, show_sma50=False, show_sma200=False):
+    """Create interactive price chart with optional technical indicators"""
     fig = go.Figure()
     
+    # Main price line
     fig.add_trace(go.Scatter(
         x=hist_data.index,
         y=hist_data['Close'],
@@ -127,6 +152,37 @@ def create_price_chart(hist_data, symbol, time_range):
         name='Close Price',
         line=dict(color='#1f77b4', width=2)
     ))
+    
+    # Add SMA indicators if requested
+    if show_sma20:
+        sma20 = calculate_sma(hist_data, 20)
+        fig.add_trace(go.Scatter(
+            x=hist_data.index,
+            y=sma20,
+            mode='lines',
+            name='SMA 20',
+            line=dict(color='#ff7f0e', width=1, dash='dash')
+        ))
+    
+    if show_sma50:
+        sma50 = calculate_sma(hist_data, 50)
+        fig.add_trace(go.Scatter(
+            x=hist_data.index,
+            y=sma50,
+            mode='lines',
+            name='SMA 50',
+            line=dict(color='#2ca02c', width=1, dash='dash')
+        ))
+    
+    if show_sma200:
+        sma200 = calculate_sma(hist_data, 200)
+        fig.add_trace(go.Scatter(
+            x=hist_data.index,
+            y=sma200,
+            mode='lines',
+            name='SMA 200',
+            line=dict(color='#d62728', width=1, dash='dash')
+        ))
     
     fig.update_layout(
         title=f"{symbol} Stock Price - {time_range}",
@@ -154,6 +210,79 @@ def create_volume_chart(hist_data, symbol, time_range):
         title=f"{symbol} Trading Volume - {time_range}",
         xaxis_title="Date",
         yaxis_title="Volume",
+        template='plotly_white',
+        height=400
+    )
+    
+    return fig
+
+def create_rsi_chart(hist_data, symbol, time_range):
+    """Create RSI chart"""
+    rsi = calculate_rsi(hist_data)
+    
+    fig = go.Figure()
+    
+    fig.add_trace(go.Scatter(
+        x=hist_data.index,
+        y=rsi,
+        mode='lines',
+        name='RSI',
+        line=dict(color='#9467bd', width=2)
+    ))
+    
+    # Add overbought/oversold reference lines
+    fig.add_hline(y=70, line_dash="dash", line_color="red", annotation_text="Overbought (70)")
+    fig.add_hline(y=30, line_dash="dash", line_color="green", annotation_text="Oversold (30)")
+    
+    fig.update_layout(
+        title=f"{symbol} RSI (Relative Strength Index) - {time_range}",
+        xaxis_title="Date",
+        yaxis_title="RSI",
+        template='plotly_white',
+        height=400,
+        yaxis=dict(range=[0, 100])
+    )
+    
+    return fig
+
+def create_macd_chart(hist_data, symbol, time_range):
+    """Create MACD chart"""
+    macd, signal_line, histogram = calculate_macd(hist_data)
+    
+    fig = go.Figure()
+    
+    # MACD line
+    fig.add_trace(go.Scatter(
+        x=hist_data.index,
+        y=macd,
+        mode='lines',
+        name='MACD',
+        line=dict(color='#1f77b4', width=2)
+    ))
+    
+    # Signal line
+    fig.add_trace(go.Scatter(
+        x=hist_data.index,
+        y=signal_line,
+        mode='lines',
+        name='Signal',
+        line=dict(color='#ff7f0e', width=2)
+    ))
+    
+    # Histogram
+    colors = ['red' if val < 0 else 'green' for val in histogram]
+    fig.add_trace(go.Bar(
+        x=hist_data.index,
+        y=histogram,
+        name='Histogram',
+        marker_color=colors,
+        opacity=0.5
+    ))
+    
+    fig.update_layout(
+        title=f"{symbol} MACD - {time_range}",
+        xaxis_title="Date",
+        yaxis_title="MACD",
         template='plotly_white',
         height=400
     )
@@ -236,18 +365,46 @@ if analyze_button or stock_symbol:
                 if hist_error:
                     st.error(hist_error)
                 else:
+                    # Technical Indicators Controls
+                    st.subheader("📊 Technical Indicators")
+                    col1, col2, col3 = st.columns(3)
+                    
+                    with col1:
+                        show_sma20 = st.checkbox("SMA 20", value=False, help="20-day Simple Moving Average")
+                    with col2:
+                        show_sma50 = st.checkbox("SMA 50", value=False, help="50-day Simple Moving Average")
+                    with col3:
+                        show_sma200 = st.checkbox("SMA 200", value=False, help="200-day Simple Moving Average")
+                    
                     # Create tabs for different charts
-                    tab1, tab2, tab3 = st.tabs(["Price Chart", "Volume Chart", "Data Table"])
+                    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Price Chart", "RSI", "MACD", "Volume", "Data Table"])
                     
                     with tab1:
-                        price_chart = create_price_chart(hist_data, stock_symbol, selected_range)
+                        price_chart = create_price_chart(
+                            hist_data, 
+                            stock_symbol, 
+                            selected_range,
+                            show_sma20=show_sma20,
+                            show_sma50=show_sma50,
+                            show_sma200=show_sma200
+                        )
                         st.plotly_chart(price_chart, use_container_width=True)
                     
                     with tab2:
+                        rsi_chart = create_rsi_chart(hist_data, stock_symbol, selected_range)
+                        st.plotly_chart(rsi_chart, use_container_width=True)
+                        st.info("📌 RSI > 70 indicates overbought conditions, RSI < 30 indicates oversold conditions")
+                    
+                    with tab3:
+                        macd_chart = create_macd_chart(hist_data, stock_symbol, selected_range)
+                        st.plotly_chart(macd_chart, use_container_width=True)
+                        st.info("📌 MACD crossovers signal potential buy/sell opportunities")
+                    
+                    with tab4:
                         volume_chart = create_volume_chart(hist_data, stock_symbol, selected_range)
                         st.plotly_chart(volume_chart, use_container_width=True)
                     
-                    with tab3:
+                    with tab5:
                         st.subheader("Historical Price Data")
                         # Format the historical data for display
                         display_data = hist_data.copy()
