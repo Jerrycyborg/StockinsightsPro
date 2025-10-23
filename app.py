@@ -54,6 +54,32 @@ with st.sidebar:
         help="Enter 2-5 stock symbols separated by commas"
     )
     compare_button = st.button("Compare Stocks", type="secondary")
+    
+    # Stock screener section
+    st.divider()
+    st.subheader("Stock Screener")
+    screener_symbols = st.text_area(
+        "Enter stock symbols to screen (comma-separated)",
+        value="AAPL,MSFT,GOOGL,AMZN,TSLA,META,NVDA,AMD,NFLX,DIS",
+        help="Enter stock symbols separated by commas"
+    )
+    
+    with st.expander("Screening Criteria"):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            min_pe = st.number_input("Min P/E Ratio", value=0.0, step=1.0, help="Minimum P/E ratio")
+            max_pe = st.number_input("Max P/E Ratio", value=100.0, step=1.0, help="Maximum P/E ratio")
+            
+            min_market_cap = st.number_input("Min Market Cap (Billions)", value=0.0, step=10.0, help="Minimum market cap in billions")
+            max_market_cap = st.number_input("Max Market Cap (Billions)", value=10000.0, step=100.0, help="Maximum market cap in billions")
+        
+        with col2:
+            min_volume = st.number_input("Min Avg Volume (Millions)", value=0.0, step=1.0, help="Minimum average volume in millions")
+            
+            min_dividend = st.number_input("Min Dividend Yield (%)", value=0.0, step=0.5, help="Minimum dividend yield percentage")
+    
+    screen_button = st.button("Screen Stocks", type="secondary")
 
 def get_stock_info(symbol):
     """Fetch stock information from Yahoo Finance"""
@@ -405,6 +431,71 @@ def format_financial_data(df, num_columns=4):
     
     return df_formatted
 
+def screen_stocks(symbols, criteria):
+    """Screen stocks based on given criteria"""
+    screened_stocks = []
+    failed_symbols = []
+    
+    for symbol in symbols:
+        stock, error = get_stock_info(symbol.strip().upper())
+        if not error and stock:
+            info = stock.info
+            
+            # Extract metrics
+            pe_ratio = info.get('trailingPE')
+            market_cap = info.get('marketCap')
+            avg_volume = info.get('averageVolume')
+            dividend_yield = info.get('dividendYield', 0)
+            
+            # Apply filters
+            passes = True
+            
+            # P/E Ratio filter
+            if pe_ratio is not None:
+                if pe_ratio < criteria['min_pe'] or pe_ratio > criteria['max_pe']:
+                    passes = False
+            elif criteria['min_pe'] > 0:  # If min_pe is set but PE is None, exclude
+                passes = False
+            
+            # Market Cap filter (convert to billions)
+            if market_cap is not None:
+                market_cap_billions = market_cap / 1e9
+                if market_cap_billions < criteria['min_market_cap'] or market_cap_billions > criteria['max_market_cap']:
+                    passes = False
+            else:
+                passes = False
+            
+            # Average Volume filter (convert to millions)
+            if avg_volume is not None:
+                avg_volume_millions = avg_volume / 1e6
+                if avg_volume_millions < criteria['min_volume']:
+                    passes = False
+            else:
+                passes = False
+            
+            # Dividend Yield filter
+            if dividend_yield is not None:
+                dividend_yield_pct = dividend_yield * 100
+                if dividend_yield_pct < criteria['min_dividend']:
+                    passes = False
+            elif criteria['min_dividend'] > 0:
+                passes = False
+            
+            if passes:
+                screened_stocks.append({
+                    'Symbol': symbol.upper(),
+                    'Company': info.get('longName', symbol),
+                    'Price': f"${info.get('regularMarketPrice', 0):.2f}",
+                    'P/E': f"{pe_ratio:.2f}" if pe_ratio else 'N/A',
+                    'Market Cap': f"${market_cap/1e9:.2f}B" if market_cap else 'N/A',
+                    'Avg Volume': f"{avg_volume/1e6:.2f}M" if avg_volume else 'N/A',
+                    'Dividend Yield': f"{dividend_yield*100:.2f}%" if dividend_yield else '0.00%'
+                })
+        else:
+            failed_symbols.append(symbol.upper())
+    
+    return screened_stocks, failed_symbols
+
 # Main application logic
 if analyze_button or stock_symbol:
     if not stock_symbol:
@@ -652,6 +743,69 @@ if compare_button:
                         )
                     else:
                         st.error("Unable to fetch historical data for comparison")
+
+# Stock screener section
+if screen_button:
+    if not screener_symbols:
+        st.warning("Please enter stock symbols to screen")
+    else:
+        symbols_list = [s.strip().upper() for s in screener_symbols.replace('\n', ',').split(',') if s.strip()]
+        
+        if len(symbols_list) == 0:
+            st.warning("Please enter at least one stock symbol to screen")
+        else:
+            st.header("🔍 Stock Screener Results")
+            
+            # Prepare criteria dictionary
+            criteria = {
+                'min_pe': min_pe,
+                'max_pe': max_pe,
+                'min_market_cap': min_market_cap,
+                'max_market_cap': max_market_cap,
+                'min_volume': min_volume,
+                'min_dividend': min_dividend
+            }
+            
+            with st.spinner(f"Screening {len(symbols_list)} stocks..."):
+                screened_results, failed = screen_stocks(symbols_list, criteria)
+                
+                if failed:
+                    st.warning(f"⚠️ Unable to fetch data for {len(failed)} symbol(s): {', '.join(failed[:5])}" + 
+                              (f" and {len(failed)-5} more" if len(failed) > 5 else ""))
+                
+                if len(screened_results) == 0:
+                    st.info(f"📊 No stocks matched the screening criteria out of {len(symbols_list) - len(failed)} stocks analyzed")
+                    
+                    # Show criteria summary
+                    st.write("**Applied Criteria:**")
+                    criteria_text = []
+                    if min_pe > 0 or max_pe < 100:
+                        criteria_text.append(f"• P/E Ratio: {min_pe} - {max_pe}")
+                    if min_market_cap > 0 or max_market_cap < 10000:
+                        criteria_text.append(f"• Market Cap: ${min_market_cap}B - ${max_market_cap}B")
+                    if min_volume > 0:
+                        criteria_text.append(f"• Avg Volume: ≥ {min_volume}M")
+                    if min_dividend > 0:
+                        criteria_text.append(f"• Dividend Yield: ≥ {min_dividend}%")
+                    
+                    for criterion in criteria_text:
+                        st.write(criterion)
+                else:
+                    st.success(f"✅ Found {len(screened_results)} stock(s) matching your criteria out of {len(symbols_list) - len(failed)} analyzed")
+                    
+                    # Display results table
+                    results_df = pd.DataFrame(screened_results)
+                    st.dataframe(results_df, width='stretch', hide_index=True)
+                    
+                    # Export screener results
+                    st.subheader("💾 Export Screener Results")
+                    screener_csv = results_df.to_csv(index=False)
+                    st.download_button(
+                        label="📋 Download Screener Results (CSV)",
+                        data=screener_csv,
+                        file_name=f"stock_screener_{datetime.now().strftime('%Y%m%d')}.csv",
+                        mime="text/csv"
+                    )
 
 # Footer information
 st.markdown("---")
