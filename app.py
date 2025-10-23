@@ -368,6 +368,43 @@ def get_comparison_metrics(symbols):
     
     return comparison_data, failed_symbols
 
+def get_fundamental_data(stock):
+    """Fetch fundamental financial statements"""
+    try:
+        # Get financial statements
+        income_stmt = stock.financials
+        balance_sheet = stock.balance_sheet
+        cash_flow = stock.cashflow
+        
+        return {
+            'income_statement': income_stmt,
+            'balance_sheet': balance_sheet,
+            'cash_flow': cash_flow
+        }
+    except Exception as e:
+        return None
+
+def format_financial_data(df, num_columns=4):
+    """Format financial data for display"""
+    if df is None or df.empty:
+        return None
+    
+    # Transpose to have dates as rows
+    df_display = df.T
+    
+    # Take only the most recent periods
+    df_display = df_display.head(num_columns)
+    
+    # Format large numbers to millions/billions
+    df_formatted = df_display.copy()
+    for col in df_formatted.columns:
+        if df_formatted[col].dtype in ['float64', 'int64']:
+            df_formatted[col] = df_formatted[col].apply(
+                lambda x: f"${x/1e9:.2f}B" if abs(x) >= 1e9 else f"${x/1e6:.2f}M" if abs(x) >= 1e6 else f"${x:,.0f}" if pd.notna(x) else "N/A"
+            )
+    
+    return df_formatted
+
 # Main application logic
 if analyze_button or stock_symbol:
     if not stock_symbol:
@@ -507,6 +544,41 @@ if analyze_button or stock_symbol:
                             file_name=f"{stock_symbol}_historical_{selected_range}_{datetime.now().strftime('%Y%m%d')}.csv",
                             mime="text/csv"
                         )
+                
+                # Fundamental Analysis Section
+                st.header("📊 Fundamental Analysis")
+                
+                with st.spinner("Fetching fundamental data..."):
+                    fundamental_data = get_fundamental_data(stock)
+                    
+                    if fundamental_data:
+                        fund_tab1, fund_tab2, fund_tab3 = st.tabs(["Income Statement", "Balance Sheet", "Cash Flow"])
+                        
+                        with fund_tab1:
+                            st.subheader("Income Statement")
+                            income_df = format_financial_data(fundamental_data['income_statement'])
+                            if income_df is not None and not income_df.empty:
+                                st.dataframe(income_df, width='stretch')
+                            else:
+                                st.info("Income statement data not available for this stock")
+                        
+                        with fund_tab2:
+                            st.subheader("Balance Sheet")
+                            balance_df = format_financial_data(fundamental_data['balance_sheet'])
+                            if balance_df is not None and not balance_df.empty:
+                                st.dataframe(balance_df, width='stretch')
+                            else:
+                                st.info("Balance sheet data not available for this stock")
+                        
+                        with fund_tab3:
+                            st.subheader("Cash Flow Statement")
+                            cashflow_df = format_financial_data(fundamental_data['cash_flow'])
+                            if cashflow_df is not None and not cashflow_df.empty:
+                                st.dataframe(cashflow_df, width='stretch')
+                            else:
+                                st.info("Cash flow data not available for this stock")
+                    else:
+                        st.info("Fundamental data not available for this stock")
 
 # Multi-stock comparison section
 if compare_button:
