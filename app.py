@@ -44,6 +44,16 @@ with st.sidebar:
     )
     
     analyze_button = st.button("Analyze Stock", type="primary")
+    
+    # Multi-stock comparison section
+    st.divider()
+    st.subheader("Compare Multiple Stocks")
+    comparison_symbols = st.text_input(
+        "Enter stock symbols (comma-separated)",
+        value="AAPL,MSFT,GOOGL",
+        help="Enter 2-5 stock symbols separated by commas"
+    )
+    compare_button = st.button("Compare Stocks", type="secondary")
 
 def get_stock_info(symbol):
     """Fetch stock information from Yahoo Finance"""
@@ -301,6 +311,63 @@ def prepare_csv_data(summary_data, hist_data, symbol):
     
     return summary_df, hist_df
 
+def create_comparison_chart(symbols_data, time_range):
+    """Create overlay price comparison chart for multiple stocks"""
+    fig = go.Figure()
+    
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
+    
+    for idx, (symbol, data) in enumerate(symbols_data.items()):
+        hist_data = data['historical']
+        # Normalize to percentage change from first day
+        if len(hist_data) > 0:
+            first_price = hist_data['Close'].iloc[0]
+            normalized_prices = ((hist_data['Close'] / first_price) - 1) * 100
+            
+            fig.add_trace(go.Scatter(
+                x=hist_data.index,
+                y=normalized_prices,
+                mode='lines',
+                name=symbol,
+                line=dict(color=colors[idx % len(colors)], width=2)
+            ))
+    
+    fig.update_layout(
+        title=f"Stock Price Comparison (% Change) - {time_range}",
+        xaxis_title="Date",
+        yaxis_title="% Change from Start",
+        hovermode='x unified',
+        template='plotly_white',
+        height=500,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+    
+    return fig
+
+def get_comparison_metrics(symbols):
+    """Get key metrics for multiple stocks"""
+    comparison_data = {}
+    failed_symbols = []
+    
+    for symbol in symbols:
+        stock, error = get_stock_info(symbol.strip().upper())
+        if not error and stock:
+            info = stock.info
+            comparison_data[symbol.upper()] = {
+                'Company': info.get('longName', symbol),
+                'Current Price': f"${info.get('regularMarketPrice', 0):.2f}",
+                'Market Cap': f"${info.get('marketCap', 0):,}" if info.get('marketCap') else 'N/A',
+                'P/E Ratio': f"{info.get('trailingPE', 0):.2f}" if info.get('trailingPE') else 'N/A',
+                'Dividend Yield': f"{info.get('dividendYield', 0)*100:.2f}%" if info.get('dividendYield') else 'N/A',
+                '52W High': f"${info.get('fiftyTwoWeekHigh', 0):.2f}" if info.get('fiftyTwoWeekHigh') else 'N/A',
+                '52W Low': f"${info.get('fiftyTwoWeekLow', 0):.2f}" if info.get('fiftyTwoWeekLow') else 'N/A',
+                'Beta': f"{info.get('beta', 0):.2f}" if info.get('beta') else 'N/A'
+            }
+        else:
+            failed_symbols.append(symbol.upper())
+    
+    return comparison_data, failed_symbols
+
 # Main application logic
 if analyze_button or stock_symbol:
     if not stock_symbol:
@@ -440,6 +507,79 @@ if analyze_button or stock_symbol:
                             file_name=f"{stock_symbol}_historical_{selected_range}_{datetime.now().strftime('%Y%m%d')}.csv",
                             mime="text/csv"
                         )
+
+# Multi-stock comparison section
+if compare_button:
+    if not comparison_symbols:
+        st.warning("Please enter stock symbols to compare")
+    else:
+        # Parse and deduplicate symbols
+        symbols_list = [s.strip().upper() for s in comparison_symbols.split(',') if s.strip()]
+        original_count = len(symbols_list)
+        symbols_list = list(dict.fromkeys(symbols_list))  # Remove duplicates while preserving order
+        
+        # Notify user if duplicates were removed
+        if len(symbols_list) < original_count:
+            duplicates_removed = original_count - len(symbols_list)
+            st.info(f"ℹ️ Removed {duplicates_removed} duplicate symbol(s). Comparing {len(symbols_list)} unique stocks.")
+        
+        if len(symbols_list) < 2:
+            st.warning("Please enter at least 2 unique stock symbols to compare")
+        elif len(symbols_list) > 5:
+            st.warning("Please enter no more than 5 stock symbols to compare")
+        else:
+            with st.spinner("Fetching comparison data..."):
+                # Get comparison metrics
+                comparison_data, failed_symbols = get_comparison_metrics(symbols_list)
+                
+                # Display warnings for failed symbols
+                if failed_symbols:
+                    st.warning(f"⚠️ Unable to fetch data for: {', '.join(failed_symbols)}")
+                
+                if len(comparison_data) == 0:
+                    st.error("Unable to fetch data for any of the provided symbols. Please check your symbols and try again.")
+                elif len(comparison_data) < 2:
+                    st.error(f"Only {len(comparison_data)} valid symbol found. Need at least 2 stocks for comparison.")
+                else:
+                    # Update header with actual count
+                    st.header(f"📊 Comparing {len(comparison_data)} Stocks: {', '.join(comparison_data.keys())}")
+                    
+                    # Display comparison table
+                    st.subheader("📋 Side-by-Side Metrics Comparison")
+                    comparison_df = pd.DataFrame(comparison_data).T
+                    st.dataframe(comparison_df, width='stretch')
+                    
+                    # Get historical data for comparison chart
+                    st.subheader("📈 Price Performance Comparison")
+                    days = time_ranges[selected_range]
+                    symbols_data = {}
+                    
+                    for symbol in comparison_data.keys():
+                        stock, error = get_stock_info(symbol)
+                        if not error:
+                            hist_data, hist_error = get_historical_data(stock, days)
+                            if not hist_error and hist_data is not None:
+                                symbols_data[symbol] = {
+                                    'historical': hist_data
+                                }
+                    
+                    if len(symbols_data) > 0:
+                        comparison_chart = create_comparison_chart(symbols_data, selected_range)
+                        st.plotly_chart(comparison_chart, use_container_width=True)
+                        
+                        st.info("📌 Chart shows percentage change from the start of the selected time period, allowing easy comparison of relative performance")
+                        
+                        # Export comparison data
+                        st.subheader("💾 Export Comparison Data")
+                        comparison_csv = comparison_df.to_csv()
+                        st.download_button(
+                            label="📋 Download Comparison Data (CSV)",
+                            data=comparison_csv,
+                            file_name=f"stock_comparison_{datetime.now().strftime('%Y%m%d')}.csv",
+                            mime="text/csv"
+                        )
+                    else:
+                        st.error("Unable to fetch historical data for comparison")
 
 # Footer information
 st.markdown("---")
