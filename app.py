@@ -5,6 +5,16 @@ import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime, timedelta
 import numpy as np
+from reportlab.lib.pagesizes import letter
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak, Image
+from reportlab.lib.enums import TA_CENTER, TA_LEFT
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend
+import matplotlib.pyplot as plt
+import io
 
 # Set page configuration
 st.set_page_config(
@@ -488,13 +498,140 @@ def screen_stocks(symbols, criteria):
                     'Price': f"${info.get('regularMarketPrice', 0):.2f}",
                     'P/E': f"{pe_ratio:.2f}" if pe_ratio else 'N/A',
                     'Market Cap': f"${market_cap/1e9:.2f}B" if market_cap else 'N/A',
-                    'Avg Volume': f"{avg_volume/1e6:.2f}M" if avg_volume else 'N/A',
+                    'Avg Volume': f"${avg_volume/1e6:.2f}M" if avg_volume else 'N/A',
                     'Dividend Yield': f"{dividend_yield*100:.2f}%" if dividend_yield else '0.00%'
                 })
         else:
             failed_symbols.append(symbol.upper())
     
     return screened_stocks, failed_symbols
+
+def create_matplotlib_chart(hist_data, symbol, chart_type='price'):
+    """Create matplotlib charts for PDF export"""
+    fig, ax = plt.subplots(figsize=(8, 4))
+    
+    if chart_type == 'price':
+        ax.plot(hist_data.index, hist_data['Close'], linewidth=2, color='#1f77b4')
+        ax.set_title(f'{symbol} Stock Price', fontsize=14, fontweight='bold')
+        ax.set_ylabel('Price ($)', fontsize=10)
+    elif chart_type == 'volume':
+        ax.bar(hist_data.index, hist_data['Volume'], color='#ff7f0e', alpha=0.7)
+        ax.set_title(f'{symbol} Trading Volume', fontsize=14, fontweight='bold')
+        ax.set_ylabel('Volume', fontsize=10)
+    elif chart_type == 'rsi':
+        rsi = calculate_rsi(hist_data)
+        ax.plot(hist_data.index, rsi, linewidth=2, color='#9467bd')
+        ax.axhline(y=70, color='r', linestyle='--', alpha=0.5)
+        ax.axhline(y=30, color='g', linestyle='--', alpha=0.5)
+        ax.set_title(f'{symbol} RSI (Relative Strength Index)', fontsize=14, fontweight='bold')
+        ax.set_ylabel('RSI', fontsize=10)
+        ax.set_ylim(0, 100)
+    
+    ax.set_xlabel('Date', fontsize=10)
+    ax.grid(True, alpha=0.3)
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    
+    # Save to bytes buffer
+    img_buffer = io.BytesIO()
+    plt.savefig(img_buffer, format='png', dpi=150, bbox_inches='tight')
+    plt.close()
+    img_buffer.seek(0)
+    
+    return img_buffer
+
+def generate_pdf_report(stock_symbol, stock_info, summary_data, hist_data):
+    """Generate comprehensive PDF report for a stock"""
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter)
+    story = []
+    styles = getSampleStyleSheet()
+    
+    # Custom styles
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Heading1'],
+        fontSize=24,
+        textColor=colors.HexColor('#1f77b4'),
+        spaceAfter=30,
+        alignment=TA_CENTER
+    )
+    
+    heading_style = ParagraphStyle(
+        'CustomHeading',
+        parent=styles['Heading2'],
+        fontSize=16,
+        textColor=colors.HexColor('#333333'),
+        spaceAfter=12,
+        spaceBefore=12
+    )
+    
+    # Title page
+    company_name = stock_info.get('longName', stock_symbol)
+    story.append(Paragraph(f"Stock Analysis Report", title_style))
+    story.append(Paragraph(f"{company_name} ({stock_symbol})", styles['Heading2']))
+    story.append(Spacer(1, 0.2*inch))
+    story.append(Paragraph(f"Report Generated: {datetime.now().strftime('%B %d, %Y')}", styles['Normal']))
+    story.append(Spacer(1, 0.5*inch))
+    
+    # Summary metrics table
+    story.append(Paragraph("Key Financial Metrics", heading_style))
+    
+    # Prepare table data
+    table_data = [['Metric', 'Value']]
+    for key, value in summary_data.items():
+        table_data.append([key, str(value)])
+    
+    # Create table
+    t = Table(table_data, colWidths=[3.5*inch, 2.5*inch])
+    t.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1f77b4')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 12),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black),
+        ('FONTSIZE', (0, 1), (-1, -1), 10),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.lightgrey]),
+    ]))
+    story.append(t)
+    story.append(PageBreak())
+    
+    # Price chart
+    story.append(Paragraph("Price Chart", heading_style))
+    price_chart = create_matplotlib_chart(hist_data, stock_symbol, 'price')
+    story.append(Image(price_chart, width=6*inch, height=3*inch))
+    story.append(Spacer(1, 0.3*inch))
+    
+    # Volume chart
+    story.append(Paragraph("Trading Volume", heading_style))
+    volume_chart = create_matplotlib_chart(hist_data, stock_symbol, 'volume')
+    story.append(Image(volume_chart, width=6*inch, height=3*inch))
+    story.append(PageBreak())
+    
+    # Technical indicators
+    story.append(Paragraph("Technical Analysis", heading_style))
+    story.append(Paragraph("RSI (Relative Strength Index)", styles['Heading3']))
+    rsi_chart = create_matplotlib_chart(hist_data, stock_symbol, 'rsi')
+    story.append(Image(rsi_chart, width=6*inch, height=3*inch))
+    story.append(Spacer(1, 0.2*inch))
+    
+    # Summary and disclaimer
+    story.append(Spacer(1, 0.3*inch))
+    story.append(Paragraph("Disclaimer", heading_style))
+    disclaimer_text = """
+    This report is for informational purposes only and should not be considered as investment advice. 
+    All data is sourced from Yahoo Finance. Past performance does not guarantee future results. 
+    Please consult with a financial advisor before making investment decisions.
+    """
+    story.append(Paragraph(disclaimer_text, styles['Normal']))
+    
+    # Build PDF
+    doc.build(story)
+    buffer.seek(0)
+    return buffer
 
 # Main application logic
 if analyze_button or stock_symbol:
@@ -611,7 +748,7 @@ if analyze_button or stock_symbol:
                     
                     # CSV Download Section
                     st.header("💾 Export Data")
-                    col1, col2 = st.columns([1, 1])
+                    col1, col2, col3 = st.columns([1, 1, 1])
                     
                     with col1:
                         # Prepare CSV data
@@ -634,6 +771,16 @@ if analyze_button or stock_symbol:
                             data=historical_csv,
                             file_name=f"{stock_symbol}_historical_{selected_range}_{datetime.now().strftime('%Y%m%d')}.csv",
                             mime="text/csv"
+                        )
+                    
+                    with col3:
+                        # Generate PDF report
+                        pdf_buffer = generate_pdf_report(stock_symbol, stock_info, summary_data, hist_data)
+                        st.download_button(
+                            label="📄 Download PDF Report",
+                            data=pdf_buffer,
+                            file_name=f"{stock_symbol}_report_{datetime.now().strftime('%Y%m%d')}.pdf",
+                            mime="application/pdf"
                         )
                 
                 # Fundamental Analysis Section
