@@ -199,7 +199,9 @@ if analyze_button or stock_symbol:
                     if summary_data:
                         # Display summary as a formatted table
                         summary_df = pd.DataFrame(list(summary_data.items()), columns=['Metric', 'Value'])
-                        st.dataframe(summary_df, use_container_width=True, hide_index=True)
+                        # Ensure all values are strings for proper display
+                        summary_df['Value'] = summary_df['Value'].astype(str)
+                        st.dataframe(summary_df, width='stretch', hide_index=True)
                 
                 with col2:
                     st.header("📈 Key Statistics")
@@ -253,7 +255,7 @@ if analyze_button or stock_symbol:
                             if col in display_data.columns:
                                 display_data[col] = display_data[col].round(2)
                         
-                        st.dataframe(display_data, use_container_width=True)
+                        st.dataframe(display_data, width='stretch')
                     
                     # CSV Download Section
                     st.header("💾 Export Data")
